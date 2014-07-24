@@ -1,18 +1,22 @@
 
 package org.futucode.ha.zk.master;
 
+import java.io.IOException;
 import java.util.Random;
 import org.apache.zookeeper.AsyncCallback;
 import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.KeeperException.Code;
 import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.ZooDefs;
+import org.apache.zookeeper.data.Stat;
 
 /**
  *
  * Asynchronous Master Watcher.
  */
 public class AsyncMaster extends ZkClient implements Watcher {
+    
+    private static final long MAIN_THREAD_TTL = 30000L;
     
     private static final String MASTER_PATH = "/master";
     
@@ -26,7 +30,7 @@ public class AsyncMaster extends ZkClient implements Watcher {
         super(hostPort);
     }
     
-    private static final AsyncCallback.StringCallback masterCreateCallback =
+    private final AsyncCallback.StringCallback masterCreateCallback =
             new AsyncCallback.StringCallback() {
                 
                 @Override
@@ -41,23 +45,49 @@ public class AsyncMaster extends ZkClient implements Watcher {
                         default:
                             isLeader = false;
                     }
-                    System.out.println("I'm " + (isLeader ? "" : "not") +
+                    System.out.println("I'm " + (isLeader ? "" : "not ") +
                             "the leader");
                 }
                 
             };
-            
-    private static void checkMaster() {};
     
     public void runForMaster() {
         this.getZk().create(MASTER_PATH, serverId.getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE,
                 CreateMode.EPHEMERAL, masterCreateCallback, null);
     }
     
-    public static void main(String[] args) {
+    private final AsyncCallback.DataCallback masterCheckCallback =
+            new AsyncCallback.DataCallback() {
+
+                @Override
+                public void processResult(int rc, String path, Object ctx,
+                        byte[] data, Stat stat) {
+                    switch (Code.get(rc)) {
+                        case CONNECTIONLOSS:
+                            checkMaster();
+                            return;
+                        case NONODE:
+                            runForMaster();
+                    }
+                }
+
+            };
+            
+    private void checkMaster() {
+        this.getZk().getData(MASTER_PATH, false, masterCheckCallback, null);
+    };
+    
+    public static void main(String[] args) throws Exception {
         
         AsyncMaster asyncMaster = new AsyncMaster(args[0]);
+        asyncMaster.startSession();
         
+        asyncMaster.runForMaster();
+        
+        // Wait for a bit
+        Thread.sleep(MAIN_THREAD_TTL);
+        
+        asyncMaster.stopSession();
     }
     
 }
